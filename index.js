@@ -32,8 +32,14 @@ async function run() {
     await client.connect();
 
     const coffeesCollection = client.db('coffeeDB').collection('coffees')
+    
+    //get data from post data..when input some data its show in get data
+    app.get('/coffees', async(req, res)=>{
+      const result = await coffeesCollection.find().toArray();
+      res.send(result);
+    })
 
-    //post data
+    //post data...when apply something its show in post data.
     app.post('/coffees', async(req, res)=>{
       const newCoffee = req.body;
       console.log(newCoffee);

@@ -32,6 +32,7 @@ async function run() {
     await client.connect();
 
     const coffeesCollection = client.db('coffeeDB').collection('coffees')
+    const usersCollection = client.db('coffeeDB').collection('users')
     
     //get data from post data..when input some data its show in get data
     app.get('/coffees', async(req, res)=>{
@@ -81,6 +82,16 @@ async function run() {
      res.send(result);
 
     })
+
+
+    //user related apis
+    app.post('/users', async(req, res)=>{
+      const userProfile = req.body;
+      console.log(userProfile);
+      const result = await usersCollection.insertOne(userProfile);
+      res.send;
+    })
+
 
     
     // Send a ping to confirm a successful connection

@@ -6,8 +6,6 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 
-// ✅ ADD THIS SIMPLE FIX:
-let isDatabaseConnected = false;
 
 
 
@@ -16,15 +14,6 @@ app.use(cors());
 app.use(express.json());
 
 
-// ✅ ADD THIS MIDDLEWARE TO CHECK DATABASE CONNECTION
-app.use('*', (req, res, next) => {
-  if (!isDatabaseConnected) {
-    return res.status(503).json({ 
-      error: 'Database is connecting, please try again in a few seconds...' 
-    });
-  }
-  next();
-});
 
 
 
@@ -53,8 +42,6 @@ async function run() {
     const usersCollection = client.db('coffeeDB').collection('users')
     
 
-       // ✅ SET DATABASE AS CONNECTED
-    isDatabaseConnected = true;
 
     //get data from post data..when input some data its show in get data
     app.get('/coffees', async(req, res)=>{
@@ -160,15 +147,7 @@ app.get('/', (req, res) => {
    res.send('✅ Coffee server is running! Database: ' + (isDatabaseConnected ? 'Connected' : 'Connecting...'))
 })
 
-// app.listen(port, () => {
-//   console.log(`Coffee server is running  on port ${port}`)
-// })
+app.listen(port, () => {
+  console.log(`Coffee server is running  on port ${port}`)
+})
 
-// Vercel compatibility fix
-module.exports = app;
-
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(port, () => {
-    console.log(`Coffee server is running on port ${port}`)
-  })
-}

@@ -5,9 +5,27 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express();
 const port = process.env.PORT || 3000;
 
+
+// ✅ ADD THIS SIMPLE FIX:
+let isDatabaseConnected = false;
+
+
+
 //midleware
 app.use(cors());
 app.use(express.json());
+
+
+// ✅ ADD THIS MIDDLEWARE TO CHECK DATABASE CONNECTION
+app.use('*', (req, res, next) => {
+  if (!isDatabaseConnected) {
+    return res.status(503).json({ 
+      error: 'Database is connecting, please try again in a few seconds...' 
+    });
+  }
+  next();
+});
+
 
 
 // console.log(process.env.DB_USER);
@@ -34,6 +52,10 @@ async function run() {
     const coffeesCollection = client.db('coffeeDB').collection('coffees')
     const usersCollection = client.db('coffeeDB').collection('users')
     
+
+       // ✅ SET DATABASE AS CONNECTED
+    isDatabaseConnected = true;
+
     //get data from post data..when input some data its show in get data
     app.get('/coffees', async(req, res)=>{
       const result = await coffeesCollection.find().toArray();
@@ -134,7 +156,8 @@ run().catch(console.dir);
 
 
 app.get('/', (req, res) => {
-  res.send('Coffe server is getting start!')
+  // res.send('Coffe server is getting start!')
+   res.send('✅ Coffee server is running! Database: ' + (isDatabaseConnected ? 'Connected' : 'Connecting...'))
 })
 
 // app.listen(port, () => {

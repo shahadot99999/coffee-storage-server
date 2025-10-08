@@ -137,6 +137,15 @@ app.get('/', (req, res) => {
   res.send('Coffe server is getting start!')
 })
 
-app.listen(port, () => {
-  console.log(`Coffee server is running  on port ${port}`)
-})
+// app.listen(port, () => {
+//   console.log(`Coffee server is running  on port ${port}`)
+// })
+
+// Vercel compatibility fix
+module.exports = app;
+
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(port, () => {
+    console.log(`Coffee server is running on port ${port}`)
+  })
+}

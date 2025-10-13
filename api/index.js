@@ -163,174 +163,208 @@ app.use(cors());
 app.use(express.json());
 
 // ✅ MongoDB connection for serverless (Vercel)
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.wr5mswb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.wr5mswb.mongodb.net/coffeeDB?retryWrites=true&w=majority&appName=Cluster0`;
+
+console.log('🔧 Environment check:', {
+  hasDB_USER: !!process.env.DB_USER,
+  hasDB_PASS: !!process.env.DB_PASS,
+  uriLength: uri.length
+});
 
 let client;
-let coffeesCollection;
-let usersCollection;
+let cachedDb = null;
 
-async function connectDB() {
-  if (client && client.topology && client.topology.isConnected()) {
-    return { coffeesCollection, usersCollection };
+async function connectToDatabase() {
+  if (cachedDb) {
+    console.log('✅ Using cached database connection');
+    return cachedDb;
   }
 
-  client = new MongoClient(uri, {
-    serverApi: {
-      version: ServerApiVersion.v1,
-      strict: true,
-      deprecationErrors: true,
-    },
-    maxPoolSize: 10,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-  });
-
   try {
+    console.log('🔗 Attempting MongoDB connection...');
+    
+    client = new MongoClient(uri, {
+      serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+      },
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    });
+
     await client.connect();
+    console.log('✅ MongoDB connected successfully!');
+    
+    // Test the connection
+    await client.db("admin").command({ ping: 1 });
+    console.log('✅ MongoDB ping successful!');
+    
     const db = client.db('coffeeDB');
-    coffeesCollection = db.collection('coffees');
-    usersCollection = db.collection('users');
-    console.log('✅ MongoDB connected successfully on Vercel!');
-    return { coffeesCollection, usersCollection };
+    cachedDb = {
+      coffeesCollection: db.collection('coffees'),
+      usersCollection: db.collection('users'),
+      client: client
+    };
+    
+    return cachedDb;
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
+    
+    // More detailed error logging
+    if (error.name === 'MongoNetworkError') {
+      console.error('🔌 Network error - check IP whitelist and credentials');
+    } else if (error.name === 'MongoServerError') {
+      console.error('🔑 Authentication error - check DB_USER and DB_PASS');
+    }
+    
     throw error;
   }
 }
+
+// ✅ Global error handler for async routes
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
 // ✅ Root endpoint
 app.get('/', (req, res) => {
   res.send('✅ Coffee Storage Server is running on Vercel!');
 });
 
-// ✅ Get all coffees
-app.get('/coffees', async (req, res) => {
+// ✅ Get all coffees with detailed error handling
+app.get('/coffees', asyncHandler(async (req, res) => {
   try {
-    const { coffeesCollection } = await connectDB();
-    const result = await coffeesCollection.find().toArray();
+    console.log('📦 Fetching coffees...');
+    const db = await connectToDatabase();
+    const result = await db.coffeesCollection.find().toArray();
+    console.log(`✅ Found ${result.length} coffees`);
     res.send(result);
   } catch (error) {
-    console.error('❌ Failed to fetch coffees:', error);
-    res.status(500).send({ error: 'Failed to fetch coffees' });
+    console.error('❌ Failed to fetch coffees:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to fetch coffees',
+      details: error.message,
+      type: error.name
+    });
   }
-});
+}));
 
 // ✅ Get single coffee
-app.get('/coffees/:id', async (req, res) => {
+app.get('/coffees/:id', asyncHandler(async (req, res) => {
   try {
-    const { coffeesCollection } = await connectDB();
+    const db = await connectToDatabase();
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };
-    const result = await coffeesCollection.findOne(query);
+    const result = await db.coffeesCollection.findOne(query);
+    
+    if (!result) {
+      return res.status(404).json({ error: 'Coffee not found' });
+    }
+    
     res.send(result);
   } catch (error) {
     console.error('❌ Failed to fetch coffee:', error);
-    res.status(500).send({ error: 'Failed to fetch coffee' });
+    res.status(500).json({ error: 'Failed to fetch coffee', details: error.message });
   }
-});
+}));
 
 // ✅ Add new coffee
-app.post('/coffees', async (req, res) => {
+app.post('/coffees', asyncHandler(async (req, res) => {
   try {
-    const { coffeesCollection } = await connectDB();
+    const db = await connectToDatabase();
     const newCoffee = req.body;
-    const result = await coffeesCollection.insertOne(newCoffee);
-    res.send(result);
+    console.log('➕ Adding new coffee:', newCoffee.name);
+    
+    const result = await db.coffeesCollection.insertOne(newCoffee);
+    res.status(201).json({
+      success: true,
+      insertedId: result.insertedId,
+      message: 'Coffee added successfully'
+    });
   } catch (error) {
     console.error('❌ Failed to add coffee:', error);
-    res.status(500).send({ error: 'Failed to add coffee' });
+    res.status(500).json({ error: 'Failed to add coffee', details: error.message });
   }
-});
+}));
 
 // ✅ Update coffee
-app.put('/coffees/:id', async (req, res) => {
+app.put('/coffees/:id', asyncHandler(async (req, res) => {
   try {
-    const { coffeesCollection } = await connectDB();
+    const db = await connectToDatabase();
     const id = req.params.id;
     const filter = { _id: new ObjectId(id) };
-    const options = { upsert: true };
     const updatedCoffee = req.body;
-    const updatedDoc = {
-      $set: updatedCoffee
-    };
-    const result = await coffeesCollection.updateOne(filter, updatedDoc, options);
-    res.send(result);
+    const updatedDoc = { $set: updatedCoffee };
+    
+    const result = await db.coffeesCollection.updateOne(filter, updatedDoc);
+    res.json({
+      success: true,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount
+    });
   } catch (error) {
     console.error('❌ Failed to update coffee:', error);
-    res.status(500).send({ error: 'Failed to update coffee' });
+    res.status(500).json({ error: 'Failed to update coffee', details: error.message });
   }
-});
+}));
 
 // ✅ Delete coffee
-app.delete('/coffees/:id', async (req, res) => {
+app.delete('/coffees/:id', asyncHandler(async (req, res) => {
   try {
-    const { coffeesCollection } = await connectDB();
+    const db = await connectToDatabase();
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };
-    const result = await coffeesCollection.deleteOne(query);
-    res.send(result);
+    const result = await db.coffeesCollection.deleteOne(query);
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount
+    });
   } catch (error) {
     console.error('❌ Failed to delete coffee:', error);
-    res.status(500).send({ error: 'Failed to delete coffee' });
+    res.status(500).json({ error: 'Failed to delete coffee', details: error.message });
   }
-});
+}));
 
-// ✅ User endpoints
-app.get('/users', async (req, res) => {
+// User endpoints (similar pattern)
+app.get('/users', asyncHandler(async (req, res) => {
   try {
-    const { usersCollection } = await connectDB();
-    const result = await usersCollection.find().toArray();
+    const db = await connectToDatabase();
+    const result = await db.usersCollection.find().toArray();
     res.send(result);
   } catch (error) {
     console.error('❌ Failed to fetch users:', error);
-    res.status(500).send({ error: 'Failed to fetch users' });
+    res.status(500).json({ error: 'Failed to fetch users', details: error.message });
   }
-});
+}));
 
-app.post('/users', async (req, res) => {
+app.post('/users', asyncHandler(async (req, res) => {
   try {
-    const { usersCollection } = await connectDB();
+    const db = await connectToDatabase();
     const userProfile = req.body;
-    const result = await usersCollection.insertOne(userProfile);
-    res.send(result);
+    const result = await db.usersCollection.insertOne(userProfile);
+    res.status(201).json({ success: true, insertedId: result.insertedId });
   } catch (error) {
     console.error('❌ Failed to add user:', error);
-    res.status(500).send({ error: 'Failed to add user' });
+    res.status(500).json({ error: 'Failed to add user', details: error.message });
   }
+}));
+
+// ✅ Global error handler
+app.use((error, req, res, next) => {
+  console.error('🚨 Global error handler:', error);
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: error.message
+  });
 });
 
-app.patch('/users', async (req, res) => {
-  try {
-    const { usersCollection } = await connectDB();
-    const { email, lastSignInTime } = req.body;
-    const filter = { email: email };
-    const updatedDoc = {
-      $set: {
-        lastSignInTime: lastSignInTime
-      }
-    };
-    const result = await usersCollection.updateOne(filter, updatedDoc);
-    res.send(result);
-  } catch (error) {
-    console.error('❌ Failed to update user:', error);
-    res.status(500).send({ error: 'Failed to update user' });
-  }
+// ✅ 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Route not found' });
 });
 
-app.delete('/users/:id', async (req, res) => {
-  try {
-    const { usersCollection } = await connectDB();
-    const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const result = await usersCollection.deleteOne(query);
-    res.send(result);
-  } catch (error) {
-    console.error('❌ Failed to delete user:', error);
-    res.status(500).send({ error: 'Failed to delete user' });
-  }
-});
-
-// ✅ Export for Vercel
 module.exports = app;
 
 // .....................................

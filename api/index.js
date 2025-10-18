@@ -159,10 +159,8 @@ const cors = require('cors');
 require('dotenv').config()
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
-// 1. Initialize Express App
+// Initialize Express App
 const app = express();
-// The port is only used for local development, Vercel ignores it in serverless mode.
-const port = process.env.PORT || 3000; 
 
 // midleware
 app.use(cors());
@@ -170,7 +168,15 @@ app.use(express.json());
 
 // --- MongoDB Setup for Serverless Environment ---
 
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.wr5mswb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+// CRITICAL: Get the full URI from the MONGODB_URI environment variable
+const uri = process.env.MONGODB_URI;
+
+// Check if URI is missing (helps debug missing Vercel ENV variables)
+if (!uri) {
+    console.error("CRITICAL ERROR: MONGODB_URI environment variable is missing.");
+    // In a serverless function, throwing here will prevent the function from running.
+    // We'll let the connection attempt handle the failure in connectDB.
+}
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -180,7 +186,7 @@ const client = new MongoClient(uri, {
   }
 });
 
-// Cache the connection and collections globally to reuse them across function invocations (cold starts).
+// Cache the connection and collections globally to reuse them across function invocations.
 let isConnected = false;
 let coffeesCollection;
 let usersCollection;
@@ -188,7 +194,6 @@ let usersCollection;
 async function connectDB() {
     // If already connected, return immediately.
     if (isConnected && coffeesCollection && usersCollection) {
-        // console.log("Using existing database connection.");
         return;
     }
   
@@ -201,35 +206,35 @@ async function connectDB() {
         
         isConnected = true;
         
-        // Optional: Ping to confirm connection (can be removed for faster cold start)
+        // Optional: Ping to confirm connection
         await client.db("admin").command({ ping: 1 });
-        console.log("Pinged deployment. Successfully connected to MongoDB!");
+        console.log("Successfully connected to MongoDB Atlas.");
 
     } catch (error) {
-        console.error("MongoDB connection error:", error);
+        console.error("MongoDB connection error:", error.message);
         isConnected = false;
-        // Do NOT re-throw or exit the process here. Vercel handles errors differently.
-        throw new Error("Failed to connect to the database.");
+        // The error is handled by the middleware below, which will send 503.
+        throw error;
     }
 }
 
-// Global connection attempt. Vercel's execution model will run this on cold start.
-connectDB().catch(err => console.error("Initial DB connection failed:", err.message));
+// Global connection attempt. This runs on cold start.
+connectDB().catch(err => console.error("Initial DB connection failed (handled by middleware):", err.message));
 
 
-// A simple middleware to ensure connection is checked on every request.
-// This handles the first request during a cold start if the initial connectDB() hasn't finished.
+// Middleware to ensure database connection before all routes
 app.use(async (req, res, next) => {
-    try {
-        await connectDB();
-        if (isConnected) {
-            next();
-        } else {
-            res.status(503).send({ error: "Service Unavailable: Database connection failed." });
+    // If not connected, attempt to connect on this request
+    if (!isConnected) {
+        try {
+            await connectDB();
+        } catch (error) {
+            // If connection fails after an attempt, send a 503 error.
+            return res.status(503).send({ error: "Service Unavailable: Database initialization error." });
         }
-    } catch (error) {
-        res.status(503).send({ error: "Service Unavailable: Database initialization error." });
     }
+    // Proceed to the route handler if connected
+    next();
 });
 
 
@@ -237,8 +242,7 @@ app.use(async (req, res, next) => {
 
 // Root route
 app.get('/', (req, res) => {
-    // We can assume isConnected is true here due to the middleware, but it's a good status check.
-    res.send(`✅ Coffee server is running! Database: ${isConnected ? 'Connected' : 'Error/Connecting...'}`);
+    res.send(`✅ Coffee server is running! Database: ${isConnected ? 'Connected' : 'Connecting...'}`);
 });
 
 
@@ -262,7 +266,6 @@ app.get('/coffees/:id', async(req, res) => {
         const result = await coffeesCollection.findOne(query);
         res.send(result);
     } catch (e) {
-        // This catches if the ID format is invalid for ObjectId
         res.status(400).send({ error: "Invalid ID format or failed to find resource." });
     }
 });
@@ -271,8 +274,12 @@ app.get('/coffees/:id', async(req, res) => {
 app.post('/coffees', async(req, res) => {
     const newCoffee = req.body;
     console.log(newCoffee);
-    const result = await coffeesCollection.insertOne(newCoffee);
-    res.send(result);
+    try {
+        const result = await coffeesCollection.insertOne(newCoffee);
+        res.send(result);
+    } catch (error) {
+        res.status(500).send({ error: "Failed to insert coffee." });
+    }
 });
 
 
@@ -310,15 +317,23 @@ app.delete('/coffees/:id', async(req, res) => {
 
 // user related apis
 app.get('/users', async(req, res) => {
-    const result = await usersCollection.find().toArray();
-    res.send(result);
+    try {
+        const result = await usersCollection.find().toArray();
+        res.send(result);
+    } catch (error) {
+        res.status(500).send({ error: "Failed to fetch users." });
+    }
 });
 
 app.post('/users', async(req, res) => {
     const userProfile = req.body;
     console.log(userProfile);
-    const result = await usersCollection.insertOne(userProfile);
-    res.send(result);
+    try {
+        const result = await usersCollection.insertOne(userProfile);
+        res.send(result);
+    } catch (error) {
+        res.status(500).send({ error: "Failed to create user." });
+    }
 });
 
 app.patch('/users', async(req, res) => {
@@ -347,6 +362,5 @@ app.delete('/users/:id', async(req, res) => {
 });
 
 
-// 2. CRITICAL CHANGE: Export the Express app instance.
-// This is how Vercel's serverless builder takes control of handling requests.
+// CRITICAL: Export the Express app instance for Vercel Serverless Function
 module.exports = app;
